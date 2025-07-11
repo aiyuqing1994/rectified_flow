@@ -53,8 +53,10 @@ class RMSNorm(Module):
 
 # sinusoidal positional embeds
 
+from constants import SINUSOIDAL_POS_EMB_THETA, UNET_DIM, UNET_DIM_MULTS
+
 class SinusoidalPosEmb(Module):
-    def __init__(self, dim, theta = 10000):
+    def __init__(self, dim, theta = SINUSOIDAL_POS_EMB_THETA):
         super().__init__()
         self.dim = dim
         self.theta = theta
