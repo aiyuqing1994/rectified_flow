@@ -1,6 +1,9 @@
+import numpy as np
 import torch
 import torch.nn as nn
-import numpy as np
+
+from constants import TIME_EMB_DIM, NUM_GROUPS
+
 
 class SinusoidalPositionEmbeddings(nn.Module):
     def __init__(self, dim):
@@ -18,7 +21,7 @@ class SinusoidalPositionEmbeddings(nn.Module):
 
 
 class ResidualBlock(nn.Module):
-    def __init__(self, in_ch, out_ch, time_emb_dim, num_groups=4):
+    def __init__(self, in_ch, out_ch, time_emb_dim, num_groups=4, dropout_rate=0.1):
         super().__init__()
         self.time_mlp = nn.Linear(time_emb_dim, out_ch)
         self.silu = nn.SiLU()
@@ -34,6 +37,7 @@ class ResidualBlock(nn.Module):
             nn.GroupNorm(num_groups, out_ch),
             nn.SiLU()
         )
+        self.dropout = nn.Dropout(dropout_rate)
         self.residual_connection = nn.Conv2d(in_ch, out_ch, kernel_size=1) if in_ch != out_ch else nn.Identity()
 
     def forward(self, x, t):
@@ -41,26 +45,28 @@ class ResidualBlock(nn.Module):
         time_emb = self.silu(self.time_mlp(t))
         h = h + time_emb.unsqueeze(-1).unsqueeze(-1)
         h = self.conv2(h)
+        h = self.dropout(h)
         return h + self.residual_connection(x)
 
 
-from constants import TIME_EMB_DIM, NUM_GROUPS
-
 class MobileResUNet(nn.Module):
-    def __init__(self, in_channels=1, out_channels=1, time_emb_dim=TIME_EMB_DIM, channel_multiplier=1.0, num_groups=NUM_GROUPS):
+    def __init__(self, in_channels=1, out_channels=1, time_emb_dim=TIME_EMB_DIM, channel_multiplier=1.0, num_groups=NUM_GROUPS, dropout_rate=0.1):
         super().__init__()
         self.time_mlp = nn.Sequential(SinusoidalPositionEmbeddings(time_emb_dim), nn.Linear(time_emb_dim, time_emb_dim), nn.SiLU())
         ch1, ch2, ch3, ch4 = int(32*channel_multiplier), int(64*channel_multiplier), int(128*channel_multiplier), int(256*channel_multiplier)
-        self.down1, self.pool1 = ResidualBlock(in_channels, ch1, time_emb_dim, num_groups), nn.MaxPool2d(2)
-        self.down2, self.pool2 = ResidualBlock(ch1, ch2, time_emb_dim, num_groups), nn.MaxPool2d(2)
-        self.down3, self.pool3 = ResidualBlock(ch2, ch3, time_emb_dim, num_groups), nn.MaxPool2d(2)
-        self.bot1 = ResidualBlock(ch3, ch4, time_emb_dim, num_groups)
-        self.upconv1, self.up1 = nn.ConvTranspose2d(ch4, ch3, 2, 2), ResidualBlock(ch3*2, ch3, time_emb_dim, num_groups)
-        self.upconv2, self.up2 = nn.ConvTranspose2d(ch3, ch2, 2, 2), ResidualBlock(ch2*2, ch2, time_emb_dim, num_groups)
-        self.upconv3, self.up3 = nn.ConvTranspose2d(ch2, ch1, 2, 2), ResidualBlock(ch1*2, ch1, time_emb_dim, num_groups)
+        self.down1, self.pool1 = ResidualBlock(in_channels, ch1, time_emb_dim, num_groups, dropout_rate), nn.MaxPool2d(2)
+        self.down2, self.pool2 = ResidualBlock(ch1, ch2, time_emb_dim, num_groups, dropout_rate), nn.MaxPool2d(2)
+        self.down3, self.pool3 = ResidualBlock(ch2, ch3, time_emb_dim, num_groups, dropout_rate), nn.MaxPool2d(2)
+        self.bot1 = ResidualBlock(ch3, ch4, time_emb_dim, num_groups, dropout_rate)
+        self.upconv1, self.up1 = nn.ConvTranspose2d(ch4, ch3, 2, 2), ResidualBlock(ch3*2, ch3, time_emb_dim, num_groups, dropout_rate)
+        self.upconv2, self.up2 = nn.ConvTranspose2d(ch3, ch2, 2, 2), ResidualBlock(ch2*2, ch2, time_emb_dim, num_groups, dropout_rate)
+        self.upconv3, self.up3 = nn.ConvTranspose2d(ch2, ch1, 2, 2), ResidualBlock(ch1*2, ch1, time_emb_dim, num_groups, dropout_rate)
         self.out = nn.Conv2d(ch1, out_channels, 1)
 
-    def forward(self, x, t):
+    def forward(self, x, t=None):
+        if t is None:
+            # For distillation stage, t is not provided. We use a tensor of zeros.
+            t = torch.zeros(x.shape[0], device=x.device)
         t = self.time_mlp(t)
         x1 = self.down1(x, t)
         p1 = self.pool1(x1)

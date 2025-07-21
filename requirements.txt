@@ -6,3 +6,6 @@ torchvision
 scipy
 ema-pytorch
 einops
+lpips
+tensorboard
+torchmetrics

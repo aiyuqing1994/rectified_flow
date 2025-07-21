@@ -1,14 +1,13 @@
+import numpy as np
 import torch
 import torch.nn as nn
-import numpy as np
-from tqdm import tqdm
-from torchvision.models import inception_v3
 from scipy.linalg import sqrtm
+from torchvision.models import inception_v3
+from tqdm import tqdm
 
+from constants import FID_EPS, INCEPTION_V3_INPUT_SIZE
 from generation.generators import generate_images
 
-# --- FID Calculation ---
-from constants import FID_EPS, INCEPTION_V3_INPUT_SIZE
 
 class InceptionV3(nn.Module):
     """Pretrained InceptionV3 model for FID calculation."""
@@ -35,7 +34,7 @@ def calculate_frechet_distance(mu1, sigma1, mu2, sigma2, eps=FID_EPS):
     if np.iscomplexobj(covmean):
         covmean = covmean.real
     tr_covmean = np.trace(covmean)
-    return (diff.dot(diff) + np.trace(sigma1) + np.trace(sigma2) - 2 * tr_covmean)
+    return diff.dot(diff) + np.trace(sigma1) + np.trace(sigma2) - 2 * tr_covmean
 
 
 @torch.no_grad()
@@ -60,15 +59,26 @@ def calculate_fid_stats(dataloader, model, device, num_images, batch_size):
 
 
 @torch.no_grad()
-def calculate_fid_for_model(gen_model, mu_real, sigma_real, inception_model, config, device):
+def calculate_fid_for_model(gen_model, mu_real, sigma_real, inception_model, config, device, stage):
     """Calculate FID score for a generator model given pre-calculated real stats."""
     gen_model.eval()
     fake_images = []
     pbar_desc = "Generating images for FID"
+    num_images_generated = 0
     for _ in tqdm(range(0, config['fid_num_images'], config['batch_size']), desc=pbar_desc):
-        n = min(config['batch_size'], config['fid_num_images'] - len(fake_images))
-        imgs = generate_images(gen_model, config, device, start_noise=None)
+        n = min(config['batch_size'], config['fid_num_images'] - num_images_generated)
+        if n <= 0:
+            break
+
+        if stage == 3:
+            imgs = gen_model(torch.randn(n, config['in_channels'], config['image_size'], config['image_size'], device=device))
+        else:
+            imgs = generate_images(gen_model, config, device)
+        
         fake_images.append(imgs.cpu().numpy())
+        num_images_generated += imgs.shape[0]
+
+    print(f"{num_images_generated} images generated for FID score calculation")
     fake_images = np.concatenate(fake_images, axis=0)
     
     fake_activations = get_activations(fake_images, inception_model, device, config['batch_size'])
