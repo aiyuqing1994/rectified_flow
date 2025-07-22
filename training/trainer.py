@@ -4,7 +4,7 @@ from tqdm import tqdm
 
 from evaluation.fid import calculate_fid_for_model
 from generation.generators import generate_and_save_comparison_images
-from .loss import LPIPSHuberLoss, L2Loss
+from .loss import LPIPSHuberLoss, L2Loss, LPIPSLoss
 from .sampler import UShapedSampler, UniformSampler
 
 
@@ -49,13 +49,17 @@ def train_one_epoch(model, ema, dataloader, optimizer, loss_fn, device, stage, c
             else:
                 raise f"Unsupported loss type {loss_fn}"
         else:  # stage == 3
-            assert isinstance(loss_fn, L2Loss), "Stage 3 must use L2Loss for distillation."
             z0, z1 = data
             z0 = z0.to(device)
             z1 = z1.to(device)
             target = z1
             pred = model(z0)
-            loss = loss_fn(pred, target)
+            if isinstance(loss_fn, LPIPSLoss):
+                loss = loss_fn(target, pred)
+            elif isinstance(loss_fn, L2Loss):
+                loss = loss_fn(pred, target)
+            else:
+                raise f"Unsupported loss type {loss_fn}"
 
         loss.backward()
         optimizer.step()
@@ -105,19 +109,24 @@ def validate_one_epoch(model, dataloader, loss_fn, device, stage, config):
                 else:
                     raise f"Unsupported loss type {loss_fn}"
             else:  # stage == 3
-                assert isinstance(loss_fn, L2Loss), "Stage 3 must use L2Loss for distillation."
                 z0, z1 = data
                 z0 = z0.to(device)
                 z1 = z1.to(device)
                 target = z1
                 pred = model(z0)
-                loss = loss_fn(pred, target)
+                if isinstance(loss_fn, LPIPSLoss):
+                    loss = loss_fn(target, pred)
+                elif isinstance(loss_fn, L2Loss):
+                    loss = loss_fn(pred, target)
+                else:
+                    raise f"Unsupported loss type {loss_fn}"
             total_loss += loss.item()
             pbar.set_postfix({"Loss": loss.item()})
     return total_loss / len(dataloader)
 
 
-def train_stage(config, stage_name, model, ema, train_loader, val_loader, optimizer, loss_fn, device, models_save_dir, images_save_dir, mu_real, sigma_real, inception_model, writer):
+def train_stage(config, stage_name, model, ema, train_loader, val_loader, optimizer, loss_fn, device, models_save_dir,
+                images_save_dir, mu_real, sigma_real, inception_model, writer):
     print(f"--- {stage_name}: Training --- ")
     scheduler = ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=5)
     stage_num = int(stage_name.split(' ')[-1])
@@ -126,20 +135,22 @@ def train_stage(config, stage_name, model, ema, train_loader, val_loader, optimi
     for epoch in range(epochs):
         avg_loss = train_one_epoch(model, ema, train_loader, optimizer, loss_fn, device, stage=stage_num, config=config)
         writer.add_scalar(f"Loss/{stage_name}", avg_loss, epoch)
-        print(f"{stage_name} | Epoch {epoch+1}/{epochs}, Loss: {avg_loss:.4f}")
-        
+        print(f"{stage_name} | Epoch {epoch + 1}/{epochs}, Loss: {avg_loss:.4f}")
+
         val_loss = validate_one_epoch(ema.ema_model, val_loader, loss_fn, device, stage=stage_num, config=config)
 
         writer.add_scalar(f"Loss/val_{stage_name}", val_loss, epoch)
-        print(f"{stage_name} | Epoch {epoch+1}/{epochs}, Val Loss: {val_loss:.4f}")
+        print(f"{stage_name} | Epoch {epoch + 1}/{epochs}, Val Loss: {val_loss:.4f}")
         scheduler.step(avg_loss)
         generate_and_save_comparison_images(ema.ema_model, config, device, epoch, stage_num, images_save_dir, writer)
         if (epoch + 1) % config['checkpoint_interval'] == 0:
-            torch.save({'model_state_dict': model.state_dict(), 'ema_state_dict': ema.state_dict()}, f"{models_save_dir}/stage{stage_num}_epoch_{epoch+1}.pth")
+            torch.save({'model_state_dict': model.state_dict(), 'ema_state_dict': ema.state_dict()},
+                       f"{models_save_dir}/stage{stage_num}_epoch_{epoch + 1}.pth")
             if config["calculate_fid"]:
-                fid_score = calculate_fid_for_model(ema.ema_model, mu_real, sigma_real, inception_model, config, device, stage_num)
+                fid_score = calculate_fid_for_model(ema.ema_model, mu_real, sigma_real, inception_model, config, device,
+                                                    stage_num)
                 writer.add_scalar(f"FID/{stage_name}", fid_score, epoch)
-                print(f"FID Score after {epoch+1} epochs: {fid_score:.2f}")
+                print(f"FID Score after {epoch + 1} epochs: {fid_score:.2f}")
 
     print(f"--- {stage_name} Finished ---")
     model.eval()

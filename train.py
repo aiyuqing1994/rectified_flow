@@ -13,7 +13,7 @@ from data_utils.data_generator import generate_next_stage_data
 from data_utils.datasets import get_dataloaders
 from evaluation.fid import InceptionV3, calculate_fid_stats
 from models import Unet, MobileResUNet
-from training.loss import L2Loss, LPIPSHuberLoss
+from training.loss import L2Loss, LPIPSHuberLoss, LPIPSLoss
 from training.trainer import train_stage
 
 
@@ -133,33 +133,38 @@ if __name__ == "__main__":
     train_stage(config, "Stage 1", model_1, ema, dataloader, val_loader, optimizer_1, loss_fn, config['device'],
                 models_save_dir, images_save_dir, mu_real, sigma_real, inception_model, writer)
 
-    reflow_train_loader, reflow_val_loader = prepare_next_stage_data(config, base_experiment_dir, ema.ema_model, "reflow", config["reflow_num_images"])
+    if config["epochs_stage2"] > 0:
+        reflow_train_loader, reflow_val_loader = prepare_next_stage_data(config, base_experiment_dir, ema.ema_model, "reflow", config["reflow_num_images"])
 
-    model_2 = create_model(config)
-    model_2.load_state_dict(ema.ema_model.state_dict())
+        model_2 = create_model(config)
+        model_2.load_state_dict(ema.ema_model.state_dict())
 
-    optimizer_2 = torch.optim.Adam(model_2.parameters(), lr=config['lr_stage2'])
-    ema_2 = EMA(model_2, beta=config['ema_decay'], update_every=10)
-    ema_2.to(config['device'])
+        optimizer_2 = torch.optim.Adam(model_2.parameters(), lr=config['lr_stage2'])
+        ema_2 = EMA(model_2, beta=config['ema_decay'], update_every=10)
+        ema_2.to(config['device'])
 
-    train_stage(config, "Stage 2", model_2, ema_2, reflow_train_loader, reflow_val_loader, optimizer_2, loss_fn,
-                config['device'], models_save_dir, images_save_dir, mu_real, sigma_real, inception_model, writer)
+        train_stage(config, "Stage 2", model_2, ema_2, reflow_train_loader, reflow_val_loader, optimizer_2, loss_fn,
+                    config['device'], models_save_dir, images_save_dir, mu_real, sigma_real, inception_model, writer)
+    else:
+        ema_2 = ema
 
-    distillation_train_loader, distillation_val_loader = prepare_next_stage_data(config, base_experiment_dir, ema_2.ema_model, "distillation", config["distillation_num_images"])
+    if config["epochs_stage3"] > 0:
+        distillation_train_loader, distillation_val_loader = prepare_next_stage_data(config, base_experiment_dir, ema_2.ema_model, "distillation", config["distillation_num_images"])
 
-    model_3 = create_model(config)
-    model_3.load_state_dict(ema_2.ema_model.state_dict())
+        model_3 = create_model(config)
+        model_3.load_state_dict(ema_2.ema_model.state_dict())
 
-    optimizer_3 = torch.optim.Adam(model_3.parameters(), lr=config['lr_stage3'])
-    ema_3 = EMA(model_3, beta=config['ema_decay'], update_every=10)
-    ema_3.to(config['device'])
+        optimizer_3 = torch.optim.Adam(model_3.parameters(), lr=config['lr_stage3'])
+        ema_3 = EMA(model_3, beta=config['ema_decay'], update_every=10)
+        ema_3.to(config['device'])
 
-    # Ensure L2Loss is used for Stage 3 (distillation)
-    loss_fn_stage3 = L2Loss()
+        # Substitute loss_fn by LPIPSLoss if LPIPSHuberLoss is specified as there is no t involved in this stage
+        if isinstance(loss_fn, LPIPSHuberLoss):
+            loss_fn = LPIPSLoss(config['device'])
 
-    train_stage(config, "Stage 3", model_3, ema_3, distillation_train_loader, distillation_val_loader, optimizer_3,
-                loss_fn_stage3, config['device'], models_save_dir, images_save_dir, mu_real, sigma_real, inception_model,
-                writer)
+        train_stage(config, "Stage 3", model_3, ema_3, distillation_train_loader, distillation_val_loader, optimizer_3,
+                    loss_fn, config['device'], models_save_dir, images_save_dir, mu_real, sigma_real, inception_model,
+                    writer)
 
     writer.close()
 
