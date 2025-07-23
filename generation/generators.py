@@ -4,11 +4,18 @@ import torch
 
 
 @torch.no_grad()
-def generate_images(model, config, device, start_noise=None, steps=None):
+def generate_images(model, config, device, start_noise=None, steps=None, num_samples=None):
     model.eval()
     if steps is None:
         steps = config['generation_steps']
-    z = start_noise if start_noise is not None else torch.randn(config.get('n_images_to_generate', 36), config['in_channels'], config['image_size'], config['image_size'], device=device)
+    
+    if start_noise is not None:
+        z = start_noise
+    else:
+        if num_samples is None:
+            num_samples = config.get('n_images_to_generate', 36)
+        z = torch.randn(num_samples, config['in_channels'], config['image_size'], config['image_size'], device=device)
+    
     dt = 1.0 / steps
     for i in range(steps):
         t = torch.full((z.shape[0],), i / steps, device=device)

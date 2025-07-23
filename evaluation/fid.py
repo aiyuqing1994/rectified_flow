@@ -73,7 +73,7 @@ def calculate_fid_for_model(gen_model, mu_real, sigma_real, inception_model, con
         if stage == 3:
             imgs = gen_model(torch.randn(n, config['in_channels'], config['image_size'], config['image_size'], device=device))
         else:
-            imgs = generate_images(gen_model, config, device)
+            imgs = generate_images(gen_model, config, device, num_samples=n)
         
         fake_images.append(imgs.cpu().numpy())
         num_images_generated += imgs.shape[0]
